@@ -1,0 +1,20 @@
+# secrets & local config
+docker/.env
+docker/config.toml
+config.toml
+*.token
+
+# generated images / data
+data/
+out/
+*.png
+*.png.tmp
+*.raw
+
+# python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+build/
+dist/

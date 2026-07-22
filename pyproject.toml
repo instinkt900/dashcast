@@ -1,0 +1,22 @@
+[project]
+name = "dashcast"
+version = "0.1.0"
+description = "Render a Home Assistant dashboard on a powerful box; display it as a flat image on a weak one."
+requires-python = ">=3.11"
+# The display side (the Pi) needs NOTHING beyond the stdlib.
+# The serve side needs Playwright, but that ships inside the Docker image,
+# so it stays an optional extra here rather than a hard dependency.
+dependencies = []
+
+[project.optional-dependencies]
+serve = ["playwright>=1.40"]
+
+[project.scripts]
+dashcast = "dashcast.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["dashcast"]

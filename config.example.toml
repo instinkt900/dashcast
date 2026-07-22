@@ -1,0 +1,60 @@
+# dashcast configuration — one file describes the whole system.
+# Copy to config.toml and edit. The HA token is NOT stored here; supply it via
+# the DASHCAST_HA_TOKEN env var (see docker/.env.example) or a token_file.
+
+[home_assistant]
+# Base URL of Home Assistant, reachable from the machine running `serve`.
+url = "http://192.0.2.10:8123"
+# Which dashboard/view to capture. e.g. "/lovelace/0", "/lovelace/kitchen",
+# or a kiosk-mode path like "/lovelace/0?kiosk".
+dashboard_path = "/lovelace/0"
+# Optional: read the long-lived token from a file instead of the env var.
+# token_file = "/run/secrets/dashcast_ha_token"
+
+[render]
+# Match the Pi Zero W panel exactly.
+width = 800
+height = 480
+device_scale_factor = 1.0
+# How often to re-screenshot, in seconds.
+interval_seconds = 5
+# Playwright load state to wait for: "load" | "domcontentloaded" | "networkidle".
+wait_until = "networkidle"
+# Settle time after a full load/reload so cards finish rendering (only applies on
+# navigation/reload, not on every shot in the screenshot-only model).
+wait_after_load_ms = 4000
+nav_timeout_ms = 60000
+# Full reload every N seconds as a safety net (0 disables). Between reloads we
+# just screenshot the live page each interval.
+reload_interval_seconds = 300
+# Where output is written (also the directory the HTTP server exposes).
+output_dir = "/data"
+output_name = "dashboard.png"
+# Raw framebuffer blob the Pi writes straight to /dev/fb0. Must match the panel:
+# rgb565 | bgr565 | rgb888 | bgr888 | rgba8888 | bgra8888. "" = PNG only.
+fb_format = "rgb565"
+fb_name = "dashboard.fb"
+# Optional CSS injected before each shot (hide header/scrollbars, etc.).
+# extra_css = "ha-panel-lovelace app-header { display: none !important; }"
+
+[serve]
+host = "0.0.0.0"
+port = 8080
+
+[display]
+# Raw framebuffer blob (.fb), as seen from the Pi — NOT the .png.
+# Point at the serve host's address/port.
+image_url = "http://192.0.2.20:8080/dashboard.fb"
+interval_seconds = 5
+fetch_timeout_seconds = 15
+# Framebuffer device to write to, and the pixel format it expects
+# (must match [render].fb_format).
+framebuffer = "/dev/fb0"
+fb_format = "rgb565"
+cache_path = "/var/lib/dashcast/dashboard.fb"
+# After this many seconds without a successful fetch, dim the last frame and
+# overlay the offline notice box. 0 disables (just keep the last frame).
+offline_after_seconds = 60
+# Pre-rendered notice box, created with `dashcast make-offline` and shipped by
+# install-pi.sh. If missing, dashcast just keeps the last frame on outage.
+offline_box_path = "/etc/dashcast/offline_box.fb"
