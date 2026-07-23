@@ -12,7 +12,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Install Playwright + only the Chromium browser and the OS libraries it needs,
 # plus Pillow/numpy for packing screenshots into raw framebuffer bytes.
-RUN pip install --no-cache-dir playwright==1.49.0 pillow numpy \
+RUN pip install --no-cache-dir playwright==1.49.0 pillow numpy tzdata \
     && playwright install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/* /root/.cache
 

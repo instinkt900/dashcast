@@ -36,6 +36,14 @@ fb_format = "rgb565"
 fb_name = "dashboard.fb"
 # Optional CSS injected before each shot (hide header/scrollbars, etc.).
 # extra_css = "ha-panel-lovelace app-header { display: none !important; }"
+# Dimmed hours: during the window below the served image is dimmed to cut
+# night-time glare and panel wear. Applied on the render side, so both the PNG
+# and the raw framebuffer come out dimmed. Times are "HH:MM" (24h) in `timezone`;
+# the window may span midnight (e.g. 22:00–07:00). Leave start/end empty to disable.
+# dim_start = "22:00"
+# dim_end = "07:00"
+# dim_brightness = 0.4          # fraction of full brightness (0.0 = black, 1.0 = off)
+# timezone = "Australia/Melbourne"   # empty = the render container's local time
 
 [serve]
 host = "0.0.0.0"

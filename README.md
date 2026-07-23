@@ -205,6 +205,14 @@ docker builder prune -f && docker image prune -f
 | `fb_format` | `rgb565` | raw format; `""` = PNG only |
 | `output_dir` / `output_name` / `fb_name` | `/data` / `dashboard.png` / `dashboard.fb` | outputs |
 | `extra_css` | — | CSS injected before each shot |
+| `dim_start` / `dim_end` | — / — | dimmed-hours window `"HH:MM"` (24h); may span midnight; empty = off |
+| `dim_brightness` | 0.4 | brightness inside the window (0.0 = black, 1.0 = no change) |
+| `timezone` | — | IANA tz for the dim schedule (e.g. `Australia/Melbourne`); empty = container local time |
+
+**Dimmed hours.** During `[dim_start, dim_end)` the served image is scaled to
+`dim_brightness` to cut night-time glare and panel wear. Dimming happens on the
+render side, so both `dashboard.png` and the raw `dashboard.fb` come out dimmed —
+the Pi needs no changes. The window may wrap midnight (e.g. `22:00`–`07:00`).
 
 `[serve]`
 | key | default | meaning |

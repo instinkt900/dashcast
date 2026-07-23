@@ -14,11 +14,12 @@ import logging
 import os
 import threading
 import time
+from datetime import datetime
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from dashcast.config import Config, load_config
+from dashcast.config import Config, RenderConfig, load_config
 
 log = logging.getLogger("dashcast.serve")
 
@@ -116,6 +117,72 @@ def png_to_framebuffer(png: bytes, width: int, height: int, fmt: str) -> bytes:
         alpha = np.full((height, width, 1), 255, dtype=np.uint8)
         return np.concatenate([rgb, alpha], axis=2).tobytes()
     raise ValueError(f"unsupported fb_format {fmt!r}")
+
+
+def _parse_hhmm(s: str) -> int:
+    """Parse "HH:MM" (24h) to minutes since midnight. Raises ValueError on junk."""
+    hh, mm = s.strip().split(":")
+    h, m = int(hh), int(mm)
+    if not (0 <= h < 24 and 0 <= m < 60):
+        raise ValueError(f"time out of range: {s!r}")
+    return h * 60 + m
+
+
+def _in_window(now_min: int, start_min: int, end_min: int) -> bool:
+    """Is now_min inside [start, end)? Handles the midnight wrap: when start > end
+    the window spans midnight (e.g. 22:00–07:00). start == end means never."""
+    if start_min == end_min:
+        return False
+    if start_min < end_min:
+        return start_min <= now_min < end_min
+    return now_min >= start_min or now_min < end_min
+
+
+# One-shot flag so a malformed dim_start/dim_end warns once, not every interval.
+_dim_parse_warned = False
+
+
+def _scheduled_brightness(r: RenderConfig, now: datetime) -> float:
+    """Full brightness (1.0) unless a valid dim window is configured and `now`
+    falls inside it, in which case r.dim_brightness."""
+    global _dim_parse_warned
+    if not r.dim_start or not r.dim_end:
+        return 1.0
+    try:
+        start = _parse_hhmm(r.dim_start)
+        end = _parse_hhmm(r.dim_end)
+    except ValueError as exc:
+        if not _dim_parse_warned:
+            log.warning("invalid dim_start/dim_end (%s); dimming disabled", exc)
+            _dim_parse_warned = True
+        return 1.0
+    now_min = now.hour * 60 + now.minute
+    return r.dim_brightness if _in_window(now_min, start, end) else 1.0
+
+
+def _resolve_timezone(name: str):
+    """Return a tzinfo for the IANA name, or None (naive local time) if empty or
+    the zone can't be found (e.g. no tz database in a slim container)."""
+    if not name:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo(name)
+    except Exception as exc:  # ZoneInfoNotFoundError, missing tzdata, bad name
+        log.warning("timezone %r unavailable (%s); using local time", name, exc)
+        return None
+
+
+def _dim_png(png: bytes, brightness: float) -> bytes:
+    """Return a brightness-scaled copy of a PNG (brightness in [0,1])."""
+    from PIL import Image, ImageEnhance
+
+    img = Image.open(io.BytesIO(png)).convert("RGB")
+    img = ImageEnhance.Brightness(img).enhance(brightness)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 class Renderer:
@@ -219,7 +286,11 @@ def run_serve(config_path: str, once: bool = False) -> int:
     out = r.output_path
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    def _publish(png: bytes) -> str:
+    tz = _resolve_timezone(r.timezone)
+
+    def _publish(png: bytes, brightness: float) -> str:
+        if brightness < 1.0:
+            png = _dim_png(png, brightness)
         _atomic_write(out, png)
         msg = f"{out.name} ({len(png)} B)"
         if r.fb_format:
@@ -230,15 +301,24 @@ def run_serve(config_path: str, once: bool = False) -> int:
 
     with Renderer(cfg) as renderer:
         if once:
-            log.info("wrote %s", _publish(renderer.capture()))
+            brightness = _scheduled_brightness(r, datetime.now(tz))
+            log.info("wrote %s", _publish(renderer.capture(), brightness))
             return 0
 
         _start_http_server(cfg)
         interval = r.interval_seconds
+        prev_brightness = 1.0
         while True:
             start = time.monotonic()
+            brightness = _scheduled_brightness(r, datetime.now(tz))
+            if brightness != prev_brightness:
+                if brightness < 1.0:
+                    log.info("entering dimmed hours (brightness=%.2f)", brightness)
+                else:
+                    log.info("leaving dimmed hours")
+                prev_brightness = brightness
             try:
-                log.info("captured %s", _publish(renderer.capture()))
+                log.info("captured %s", _publish(renderer.capture(), brightness))
             except Exception as exc:  # keep the loop alive; last good image stays served
                 log.error("capture failed: %s", exc, exc_info=log.isEnabledFor(logging.DEBUG))
             elapsed = time.monotonic() - start

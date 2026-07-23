@@ -61,6 +61,14 @@ class RenderConfig:
     # Extra CSS injected before each screenshot — handy for hiding scrollbars,
     # HA header, etc. on a kiosk view.
     extra_css: str = ""
+    # Scheduled "dimmed hours": during the window [dim_start, dim_end) the served
+    # image is dimmed to `dim_brightness` (fraction of full, 1.0 = off) to cut
+    # night-time glare and panel wear. Times are "HH:MM" (24h) in `timezone`
+    # (empty = the render host's local time). Empty start/end disables dimming.
+    dim_start: str = ""
+    dim_end: str = ""
+    dim_brightness: float = 0.4
+    timezone: str = ""
 
     @property
     def output_path(self) -> Path:
@@ -134,6 +142,7 @@ def load_config(path: str | os.PathLike) -> Config:
     )
 
     render = RenderConfig(**_known(raw.get("render", {}), RenderConfig))
+    render.dim_brightness = min(1.0, max(0.0, render.dim_brightness))
     serve = ServeConfig(**_known(raw.get("serve", {}), ServeConfig))
     display = DisplayConfig(**_known(raw.get("display", {}), DisplayConfig))
 
