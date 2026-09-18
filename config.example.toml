@@ -32,6 +32,8 @@ output_dir = "/data"
 output_name = "dashboard.png"
 # Raw framebuffer blob the Pi writes straight to /dev/fb0. Must match the panel:
 # rgb565 | bgr565 | rgb888 | bgr888 | rgba8888 | bgra8888. "" = PNG only.
+# A gzip'd twin (dashboard.fb.gz) is published alongside automatically; it is
+# ~30x smaller and is what [display].image_url should point at.
 fb_format = "rgb565"
 fb_name = "dashboard.fb"
 # Optional CSS injected before each shot (hide header/scrollbars, etc.).
@@ -50,9 +52,11 @@ host = "0.0.0.0"
 port = 8080
 
 [display]
-# Raw framebuffer blob (.fb), as seen from the Pi — NOT the .png.
-# Point at the serve host's address/port.
-image_url = "http://192.0.2.20:8080/dashboard.fb"
+# Framebuffer blob as seen from the Pi — NOT the .png. Prefer the gzip'd twin:
+# ~25 KB instead of 768 KB per update, which is the difference between a
+# comfortable poll and saturating a Pi Zero W's WiFi. The display sniffs the
+# gzip magic bytes, so plain "/dashboard.fb" also works unchanged.
+image_url = "http://192.0.2.20:8080/dashboard.fb.gz"
 interval_seconds = 5
 fetch_timeout_seconds = 15
 # Framebuffer device to write to, and the pixel format it expects

@@ -13,6 +13,7 @@ dashboard can't be mistaken for a live one.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import logging
 import os
@@ -76,6 +77,20 @@ def _atomic_write(dst: Path, data: bytes) -> None:
     tmp = dst.with_suffix(dst.suffix + ".tmp")
     tmp.write_bytes(data)
     os.replace(tmp, dst)
+
+
+def _unpack(blob: bytes) -> bytes:
+    """Return raw framebuffer bytes, inflating first if the blob is gzip'd.
+
+    Sniffing the two-byte gzip magic rather than reading a config flag means
+    `image_url` can point at either `dashboard.fb` or `dashboard.fb.gz` and this
+    just works — so the two ends can be upgraded in either order, with no flag
+    day and nothing to keep in sync. Framebuffer.write still length-checks the
+    result, which doubles as an integrity check on the archive.
+    """
+    if blob[:2] == b"\x1f\x8b":
+        return gzip.decompress(blob)
+    return blob
 
 
 def _dim_rgb565(data: bytes) -> bytes:
@@ -180,9 +195,10 @@ def run_display(config_path: str, once: bool = False) -> int:
     offline_shown = False
 
     # Paint a cached frame immediately so boot doesn't leave console text on screen.
+    # The cache holds whatever came off the wire, so it may be gzip'd.
     if cache.is_file():
         try:
-            last_good = cache.read_bytes()
+            last_good = _unpack(cache.read_bytes())
             fb.write(last_good)
             shown_hash = hashlib.sha256(last_good).hexdigest()
             log.info("painted cached frame (%d bytes)", len(last_good))
@@ -266,17 +282,25 @@ def run_display(config_path: str, once: bool = False) -> int:
                         else:
                             log.debug("not modified; keeping current frame")
                     else:
-                        last_good = data  # newest bytes we hold, painted or not
-                        new_hash = hashlib.sha256(data).hexdigest()
+                        frame = _unpack(data)  # data may be the gzip'd blob
+                        last_good = frame  # newest frame we hold, painted or not
+                        new_hash = hashlib.sha256(frame).hexdigest()
                         # Force a write when recovering from offline, even if the
                         # frame is byte-identical to what was up before.
                         if new_hash != shown_hash or offline_shown:
-                            fb.write(data)
+                            fb.write(frame)
+                            # Cache what came off the wire, not the inflated frame:
+                            # ~25 KB per update instead of 768 KB, which matters for
+                            # SD card wear on a Pi that has been running for months.
                             _atomic_write(cache, data)
                             if offline_shown:
                                 log.info("server recovered; resumed live frames")
                             else:
-                                log.info("updated display (%d bytes)", len(data))
+                                log.info(
+                                    "updated display (%d B on the wire -> %d B frame)",
+                                    len(data),
+                                    len(frame),
+                                )
                             shown_hash = new_hash
                             offline_shown = False
                         else:

@@ -18,9 +18,15 @@ One codebase, one config file, two roles.
 
 ## The two-ends contract (read this first)
 
-- The serve side writes two files atomically to its data dir: `dashboard.png`
-  (for humans/debugging) and `dashboard.fb` (**raw framebuffer bytes**). The Pi
-  fetches the **`.fb`**, not the PNG.
+- The serve side writes three files atomically to its data dir: `dashboard.png`
+  (for humans/debugging), `dashboard.fb` (**raw framebuffer bytes**) and
+  `dashboard.fb.gz` (gzip'd twin of the `.fb`). The Pi fetches the **`.fb.gz`**,
+  never the PNG. Measured on a real frame: 768,000 B raw → **25,022 B gzip'd
+  (~30x)**, which also beats the PNG (54,090 B) while needing only stdlib `zlib`
+  to unpack instead of an image decoder the Pi hasn't got.
+- The display **sniffs the gzip magic bytes** rather than reading a config flag,
+  so `image_url` may point at either file and the two ends can be upgraded in
+  either order. Keep it that way — it means no flag day.
 - **The serve side only rewrites a file when its bytes actually change, and the Pi
   fetches with `If-Modified-Since`.** These two halves are load-bearing together:
   file **mtime is the cache validator**, so republishing an identical frame would
@@ -101,7 +107,7 @@ One TOML with four sections (template: `config.example.toml`):
   `fb_format`/`fb_name`, `extra_css` (kiosk CSS injected before capture), plus the
   **dimmed-hours** keys below.
 - `[serve]` — `host`/`port` (8080).
-- `[display]` — `image_url` (point at the **`.fb`**), `framebuffer` (`/dev/fb0`),
+- `[display]` — `image_url` (point at the **`.fb.gz`**), `framebuffer` (`/dev/fb0`),
   `fb_format` (must match `[render]`), `cache_path`, `offline_box_path`, plus the
   offline-trigger keys: `offline_after_seconds` **and** `offline_min_failures`
   (both must be satisfied — elapsed time alone gave false offline notices), and

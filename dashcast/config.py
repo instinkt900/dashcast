@@ -78,6 +78,13 @@ class RenderConfig:
     def fb_path(self) -> Path:
         return Path(self.output_dir) / self.fb_name
 
+    @property
+    def fb_gz_path(self) -> Path:
+        """gzip'd twin of fb_path, published alongside it. rgb565 dashboard
+        pixels are mostly long flat runs, so this lands around 30x smaller than
+        the raw blob — which is what the Pi actually fetches."""
+        return self.fb_path.with_suffix(self.fb_path.suffix + ".gz")
+
 
 @dataclass
 class ServeConfig:

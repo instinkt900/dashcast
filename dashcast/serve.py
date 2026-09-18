@@ -8,6 +8,7 @@ over HTTP with `Cache-Control: no-store` so the display always gets fresh bytes.
 
 from __future__ import annotations
 
+import gzip
 import io
 import json
 import logging
@@ -342,12 +343,23 @@ def run_serve(config_path: str, once: bool = False) -> int:
         parts.append(f"{out.name} ({len(png)} B)")
         if r.fb_format:
             # A changed PNG can still quantise to the same framebuffer bytes, so
-            # gate the .fb write separately — the display only fetches this one.
+            # gate the .fb write separately — the display only fetches these.
             fb = png_to_framebuffer(png, r.width, r.height, r.fb_format)
             if fb != last_fb:
                 _atomic_write(r.fb_path, fb)
+                # Publish a gzip'd twin and let the Pi fetch that instead. rgb565
+                # dashboard pixels are mostly long flat runs, so this measures
+                # ~30x smaller than the raw blob (and ~2x smaller than the PNG,
+                # while needing only stdlib zlib to unpack rather than an image
+                # decoder the Pi hasn't got). mtime=0 keeps the output byte-stable
+                # so identical frames don't produce differing archives.
+                gz = gzip.compress(fb, compresslevel=6, mtime=0)
+                _atomic_write(r.fb_gz_path, gz)
                 last_fb = fb
-                parts.append(f"{r.fb_path.name} ({len(fb)} B, {r.fb_format})")
+                parts.append(
+                    f"{r.fb_path.name} ({len(fb)} B, {r.fb_format}) "
+                    f"+ {r.fb_gz_path.name} ({len(gz)} B, {len(fb) / max(1, len(gz)):.0f}x smaller)"
+                )
         return " + ".join(parts)
 
     with Renderer(cfg) as renderer:
