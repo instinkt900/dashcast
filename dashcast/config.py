@@ -97,8 +97,18 @@ class DisplayConfig:
     fb_format: str = "rgb565"
     cache_path: str = "/var/lib/dashcast/dashboard.fb"
     # Show the "offline" overlay (dimmed last frame + notice box) after this many
-    # seconds without a successful fetch. 0 disables (just keep last frame).
+    # seconds without reaching the server. 0 disables (just keep last frame).
     offline_after_seconds: float = 60.0
+    # ...and only once this many fetches have failed back to back. Guards against
+    # a couple of slow transfers tripping the fetch timeout and being mistaken
+    # for an outage: with a 15s timeout, two stalls alone can span the grace
+    # period while the server is perfectly healthy.
+    offline_min_failures: int = 3
+    # Occasionally re-fetch unconditionally instead of sending an
+    # If-Modified-Since, so a cached frame that has diverged from the server's
+    # can't persist. The server holds mtime steady while the dashboard is
+    # unchanged, so 304s would otherwise continue indefinitely. 0 disables.
+    full_refresh_seconds: float = 300.0
     # Pre-rendered notice box (.fb) produced by `dashcast make-offline`.
     offline_box_path: str = "/etc/dashcast/offline_box.fb"
 

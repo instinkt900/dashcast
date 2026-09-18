@@ -12,6 +12,7 @@ import io
 import json
 import logging
 import os
+import sys
 import threading
 import time
 from datetime import datetime
@@ -47,7 +48,7 @@ _INIT_SCRIPT = """
 
 
 class _Handler(SimpleHTTPRequestHandler):
-    """Serves the output directory, always fresh, with a /healthz endpoint."""
+    """Serves the output directory, always revalidated, with a /healthz endpoint."""
 
     def do_GET(self):  # noqa: N802
         if self.path.rstrip("/") in ("/healthz", "/health"):
@@ -61,18 +62,39 @@ class _Handler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def end_headers(self):
-        self.send_header("Cache-Control", "no-store, must-revalidate")
-        self.send_header("Pragma", "no-cache")
+        # "no-cache" (revalidate before reuse), NOT "no-store" (never keep a
+        # copy): the display *does* keep the last frame and asks us about it with
+        # an If-Modified-Since, which SimpleHTTPRequestHandler answers with a
+        # bodyless 304. That is the difference between the Pi pulling ~200 bytes
+        # and pulling the whole 768 KB blob on every poll.
+        self.send_header("Cache-Control", "no-cache, must-revalidate")
         super().end_headers()
 
     def log_message(self, fmt, *a):  # quieter access log
         log.debug("http %s", fmt % a)
 
 
+class _Server(ThreadingHTTPServer):
+    """Threading server that shrugs off clients hanging up mid-response.
+
+    The display abandons a download whenever its fetch timeout fires, and the
+    stock handler reports each one as a full BrokenPipeError traceback. On a
+    marginal WiFi link those are routine and they bury the log lines that
+    actually matter, so demote them to debug.
+    """
+
+    def handle_error(self, request, client_address):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError, TimeoutError)):
+            log.debug("client %s hung up mid-response: %r", client_address[0], exc)
+            return
+        super().handle_error(request, client_address)
+
+
 def _start_http_server(cfg: Config) -> ThreadingHTTPServer:
     directory = str(cfg.render.output_path.parent)
     handler = partial(_Handler, directory=directory)
-    httpd = ThreadingHTTPServer((cfg.serve.host, cfg.serve.port), handler)
+    httpd = _Server((cfg.serve.host, cfg.serve.port), handler)
     t = threading.Thread(target=httpd.serve_forever, name="http", daemon=True)
     t.start()
     log.info(
@@ -288,16 +310,45 @@ def run_serve(config_path: str, once: bool = False) -> int:
 
     tz = _resolve_timezone(r.timezone)
 
+    # Bytes of the most recently published files, so we can skip rewriting an
+    # identical frame. See _publish for why that matters so much.
+    last_png: bytes | None = None
+    last_fb: bytes | None = None
+
     def _publish(png: bytes, brightness: float) -> str:
+        """Write the PNG and the raw framebuffer blob, but only when the bytes
+        actually changed. Returns a description of what was written, or "" if the
+        frame was identical to the last one.
+
+        A HA dashboard is mostly static between updates — often a ticking clock is
+        the only delta — so most intervals produce a byte-identical frame.
+        Rewriting it anyway bumps the file's mtime, and mtime is exactly what the
+        display's conditional GET keys off: a fresh mtime forces the Pi to
+        re-download the full 768 KB blob even though not one pixel moved. Holding
+        mtime steady lets the HTTP server answer 304 instead, which is what keeps
+        the Pi Zero W's WiFi from saturating (a saturated link stalls fetches,
+        which used to trip the display's offline overlay while nothing was down).
+        Skipping the write also spares this host's disk, which is tight.
+        """
+        nonlocal last_png, last_fb
         if brightness < 1.0:
             png = _dim_png(png, brightness)
+        if png == last_png:
+            return ""  # nothing moved; leave both files (and their mtimes) alone
+
+        parts = []
         _atomic_write(out, png)
-        msg = f"{out.name} ({len(png)} B)"
+        last_png = png
+        parts.append(f"{out.name} ({len(png)} B)")
         if r.fb_format:
+            # A changed PNG can still quantise to the same framebuffer bytes, so
+            # gate the .fb write separately — the display only fetches this one.
             fb = png_to_framebuffer(png, r.width, r.height, r.fb_format)
-            _atomic_write(r.fb_path, fb)
-            msg += f" + {r.fb_path.name} ({len(fb)} B, {r.fb_format})"
-        return msg
+            if fb != last_fb:
+                _atomic_write(r.fb_path, fb)
+                last_fb = fb
+                parts.append(f"{r.fb_path.name} ({len(fb)} B, {r.fb_format})")
+        return " + ".join(parts)
 
     with Renderer(cfg) as renderer:
         if once:
@@ -318,7 +369,11 @@ def run_serve(config_path: str, once: bool = False) -> int:
                     log.info("leaving dimmed hours")
                 prev_brightness = brightness
             try:
-                log.info("captured %s", _publish(renderer.capture(), brightness))
+                published = _publish(renderer.capture(), brightness)
+                if published:
+                    log.info("captured %s", published)
+                else:
+                    log.debug("captured; frame unchanged, not republishing")
             except Exception as exc:  # keep the loop alive; last good image stays served
                 log.error("capture failed: %s", exc, exc_info=log.isEnabledFor(logging.DEBUG))
             elapsed = time.monotonic() - start

@@ -21,6 +21,14 @@ One codebase, one config file, two roles.
 - The serve side writes two files atomically to its data dir: `dashboard.png`
   (for humans/debugging) and `dashboard.fb` (**raw framebuffer bytes**). The Pi
   fetches the **`.fb`**, not the PNG.
+- **The serve side only rewrites a file when its bytes actually change, and the Pi
+  fetches with `If-Modified-Since`.** These two halves are load-bearing together:
+  file **mtime is the cache validator**, so republishing an identical frame would
+  bump mtime and force the Pi to re-pull the whole 768 KB blob every poll. A
+  Pi Zero W's WiFi can't sustain that — it stalls, fetches trip
+  `fetch_timeout_seconds`, and the display used to mistake that for an outage and
+  flash the offline notice while nothing was down. Don't "simplify" either half
+  back to an unconditional write/fetch. Unchanged frames cost a bodyless 304.
 - **`fb_format` must match on both ends** (default `rgb565`; see
   `constants.FB_BYTES_PER_PIXEL` for supported formats). Panel native size is
   800×480 (`constants.DEFAULT_WIDTH/HEIGHT`).
@@ -74,8 +82,10 @@ dashcast make-offline -c config.toml -o out.fb [--text ..] [--subtext ..]
 
 - `serve` keeps ONE Chromium context alive, navigates once, then screenshots each
   interval (HA's websocket keeps the DOM live); it does a full reload every
-  `reload_interval_seconds` (default 300) as a drift/leak safety net. Images are
-  served with `Cache-Control: no-store`.
+  `reload_interval_seconds` (default 300) as a drift/leak safety net. Identical
+  frames are **not** republished (see the contract above), and images are served
+  with `Cache-Control: no-cache, must-revalidate` — revalidate before reuse, *not*
+  `no-store`, which would forbid the Pi from holding the frame it revalidates.
 - `serve --once` captures a single screenshot and exits (no HTTP) — handy for dev.
 - `make-offline` needs Pillow, so run it on the server/dev box, **not** the Pi;
   the resulting `.fb` is shipped to the Pi.
@@ -92,8 +102,15 @@ One TOML with four sections (template: `config.example.toml`):
   **dimmed-hours** keys below.
 - `[serve]` — `host`/`port` (8080).
 - `[display]` — `image_url` (point at the **`.fb`**), `framebuffer` (`/dev/fb0`),
-  `fb_format` (must match `[render]`), `cache_path`, `offline_after_seconds`,
-  `offline_box_path`.
+  `fb_format` (must match `[render]`), `cache_path`, `offline_box_path`, plus the
+  offline-trigger keys: `offline_after_seconds` **and** `offline_min_failures`
+  (both must be satisfied — elapsed time alone gave false offline notices), and
+  `full_refresh_seconds` (how often to skip the `If-Modified-Since` so a diverged
+  cached frame can't stick).
+
+**What counts as "offline":** only failing to *reach* the server. A 304 counts as
+reached, and a framebuffer write error is logged as a display fault rather than an
+outage — otherwise a bad `/dev/fb0` write masquerades as a server outage.
 
 **Dimmed hours** (render-side): during `[dim_start, dim_end)` the served image is
 dimmed to `dim_brightness` (fraction of full; `1.0` = off) via

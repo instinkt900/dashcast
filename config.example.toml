@@ -60,9 +60,16 @@ fetch_timeout_seconds = 15
 framebuffer = "/dev/fb0"
 fb_format = "rgb565"
 cache_path = "/var/lib/dashcast/dashboard.fb"
-# After this many seconds without a successful fetch, dim the last frame and
+# After this many seconds without reaching the server, dim the last frame and
 # overlay the offline notice box. 0 disables (just keep the last frame).
+# A 304 Not Modified counts as reaching the server, same as a full frame.
 offline_after_seconds = 60
+# ...and only after this many consecutive failed fetches, so one or two slow
+# transfers tripping fetch_timeout_seconds aren't mistaken for an outage.
+offline_min_failures = 3
+# How often to skip the If-Modified-Since and re-fetch the whole frame, as a
+# safety net against a cached frame diverging from the server's. 0 disables.
+full_refresh_seconds = 300
 # Pre-rendered notice box, created with `dashcast make-offline` and shipped by
 # install-pi.sh. If missing, dashcast just keeps the last frame on outage.
 offline_box_path = "/etc/dashcast/offline_box.fb"

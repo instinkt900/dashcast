@@ -45,12 +45,31 @@ def _install_signal_handlers() -> None:
     signal.signal(signal.SIGINT, _stop)
 
 
-def _fetch(url: str, timeout: float) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": "dashcast-display"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (trusted LAN URL)
-        if resp.status != 200:
-            raise urllib.error.HTTPError(url, resp.status, "unexpected status", resp.headers, None)
-        return resp.read()
+def _fetch(url: str, timeout: float, if_modified_since: str | None) -> tuple[bytes | None, str | None]:
+    """GET the frame, conditionally. Returns (data, last_modified); data is None
+    when the server answered 304, i.e. the frame we already have is still current.
+
+    The conditional GET is what keeps this affordable. A full frame is 768 KB and
+    we poll every few seconds, but the dashboard usually hasn't changed — an
+    If-Modified-Since turns those polls into a bodyless 304 of a couple hundred
+    bytes. Without it the Pi Zero W's single-antenna 2.4 GHz WiFi is pinned near
+    saturation, transfers start stalling past the fetch timeout, and a run of
+    those stalls looks like an outage to the offline-overlay logic.
+    """
+    headers = {"User-Agent": "dashcast-display"}
+    if if_modified_since:
+        headers["If-Modified-Since"] = if_modified_since
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (trusted LAN URL)
+            if resp.status != 200:
+                raise urllib.error.HTTPError(url, resp.status, "unexpected status", resp.headers, None)
+            return resp.read(), resp.headers.get("Last-Modified")
+    except urllib.error.HTTPError as exc:
+        # urllib treats any non-2xx as an error, including the 304 we asked for.
+        if exc.code == 304:
+            return None, if_modified_since
+        raise
 
 
 def _atomic_write(dst: Path, data: bytes) -> None:
@@ -172,39 +191,101 @@ def run_display(config_path: str, once: bool = False) -> int:
 
     interval = cfg.display.interval_seconds
     grace = cfg.display.offline_after_seconds
+    min_failures = cfg.display.offline_min_failures
+    refresh = cfg.display.full_refresh_seconds
+    last_modified: str | None = None  # validator for the frame we're showing
+    failures = 0  # consecutive failures to *reach* the server
+    last_full = 0.0  # monotonic time of the last unconditional fetch
     try:
         while _running:
             start = time.monotonic()
+
+            # Normally revalidate what we already have. Periodically ask
+            # unconditionally so a diverged cached frame can't stick forever
+            # (the server holds mtime steady while the dashboard is unchanged,
+            # so 304s can otherwise continue indefinitely).
+            validator = last_modified
+            if refresh > 0 and (start - last_full) >= refresh:
+                validator = None
+
+            # --- network phase: could we reach the server at all? ---
             try:
-                data = _fetch(cfg.display.image_url, cfg.display.fetch_timeout_seconds)
-                new_hash = hashlib.sha256(data).hexdigest()
-                # Force a write when recovering from offline, even if the frame
-                # is byte-identical to what was up before the outage.
-                if new_hash != shown_hash or offline_shown:
-                    fb.write(data)
-                    _atomic_write(cache, data)
-                    if offline_shown:
-                        log.info("server recovered; resumed live frames")
-                    else:
-                        log.info("updated display (%d bytes)", len(data))
-                    shown_hash = new_hash
-                    offline_shown = False
-                else:
-                    log.debug("unchanged; keeping current frame")
-                last_good = data
-                last_success = time.monotonic()
+                data, lm = _fetch(cfg.display.image_url, cfg.display.fetch_timeout_seconds, validator)
             except Exception as exc:
+                failures += 1
                 stale = time.monotonic() - last_success
-                if offline_box is not None and not offline_shown and grace > 0 and stale >= grace:
+                # Require BOTH a long dry spell and several consecutive failures.
+                # One slow transfer that trips the fetch timeout is not an outage,
+                # and treating it as one is what used to flash the offline notice
+                # over a perfectly healthy dashboard.
+                if (
+                    offline_box is not None
+                    and not offline_shown
+                    and grace > 0
+                    and stale >= grace
+                    and failures >= min_failures
+                ):
                     base = last_good if last_good is not None else bytes(expected)
                     try:
                         fb.write(_render_offline_frame(base, offline_box, cfg, bpp))
                         offline_shown = True
-                        log.warning("server unreachable for %.0fs — showing offline overlay", stale)
+                        log.warning(
+                            "server unreachable for %.0fs (%d consecutive failures) — showing offline overlay",
+                            stale,
+                            failures,
+                        )
                     except Exception as werr:
                         log.error("failed to draw offline overlay: %s", werr)
                 else:
-                    log.error("fetch/display failed (keeping current frame): %s", exc)
+                    log.warning(
+                        "fetch failed (%d in a row, %.0fs stale; keeping current frame): %s",
+                        failures,
+                        stale,
+                        exc,
+                    )
+            else:
+                # A 200 *or* a 304 both prove the server is up — that, and only
+                # that, is what the offline overlay is about.
+                failures = 0
+                last_success = time.monotonic()
+                if validator is None:
+                    last_full = last_success
+                if lm:
+                    last_modified = lm
+
+                # --- paint phase: kept separate so a framebuffer fault is
+                # reported as a display problem, not mistaken for an outage. ---
+                try:
+                    if data is None:
+                        # Nothing new. Only touch the panel if it's currently
+                        # showing the offline overlay rather than a live frame.
+                        if offline_shown and last_good is not None:
+                            fb.write(last_good)
+                            offline_shown = False
+                            log.info("server reachable again; restored last live frame")
+                        else:
+                            log.debug("not modified; keeping current frame")
+                    else:
+                        last_good = data  # newest bytes we hold, painted or not
+                        new_hash = hashlib.sha256(data).hexdigest()
+                        # Force a write when recovering from offline, even if the
+                        # frame is byte-identical to what was up before.
+                        if new_hash != shown_hash or offline_shown:
+                            fb.write(data)
+                            _atomic_write(cache, data)
+                            if offline_shown:
+                                log.info("server recovered; resumed live frames")
+                            else:
+                                log.info("updated display (%d bytes)", len(data))
+                            shown_hash = new_hash
+                            offline_shown = False
+                        else:
+                            log.debug("unchanged; keeping current frame")
+                except Exception as exc:
+                    log.error("could not write frame to %s: %s", cfg.display.framebuffer, exc)
+                    # Drop the validator so the next poll refetches in full rather
+                    # than getting a 304 and leaving the panel permanently behind.
+                    last_modified = None
 
             if once:
                 break
