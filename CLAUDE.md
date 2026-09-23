@@ -118,6 +118,21 @@ One TOML with four sections (template: `config.example.toml`):
 reached, and a framebuffer write error is logged as a display fault rather than an
 outage — otherwise a bad `/dev/fb0` write masquerades as a server outage.
 
+**Tuning the offline trigger (hard-won):** `offline_after_seconds` must sit *above*
+the noise floor of the Pi's WiFi, not near it. A Pi Zero W is 2.4 GHz-only with a
+single antenna, and on a contended home band it routinely loses 40–100s of
+connectivity with nothing wrong anywhere: 4.66 days of logs gave 1,531 runs of
+failed fetches — median gap 43s, p99 78s, **worst 98s** — dominated by
+`EHOSTUNREACH` (ARP got no reply, i.e. the server was never even contacted). At
+`offline_after_seconds = 60` that produced **640** false notices; at 120 it would
+have produced **zero**. Hence the 180s default. Note `offline_min_failures` is the
+*weaker* guard — `EHOSTUNREACH` fails instantly rather than timing out, so the
+counter races up in seconds and raising it alone barely helps (6 still left 333
+events). Time is the lever. Symptoms of this class of problem are load-dependent by
+hour of day (household activity), so check a per-hour histogram before suspecting
+the server. Also mind the clock: the Pi is on `Europe/London` while the dev box is
+`AEST`, so journal timestamps need a +9h shift to line up.
+
 **Dimmed hours** (render-side): during `[dim_start, dim_end)` the served image is
 dimmed to `dim_brightness` (fraction of full; `1.0` = off) via
 `PIL.ImageEnhance.Brightness`, applied in `_publish` **before** the atomic write so

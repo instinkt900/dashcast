@@ -94,22 +94,36 @@ class ServeConfig:
 
 @dataclass
 class DisplayConfig:
-    # Point this at the raw framebuffer blob (.fb), not the PNG — the Pi writes
-    # these bytes straight to the framebuffer device.
-    image_url: str = "http://192.0.2.20:8080/dashboard.fb"
+    # Point this at the gzip'd framebuffer blob (.fb.gz), not the PNG — the Pi
+    # inflates it and writes the bytes straight to the framebuffer device. Plain
+    # .fb also works; the display sniffs the gzip magic either way.
+    image_url: str = "http://192.0.2.20:8080/dashboard.fb.gz"
     interval_seconds: float = 30.0
-    fetch_timeout_seconds: float = 15.0
+    # Kept deliberately short. The payload is ~25 KB, so a healthy fetch is well
+    # under a second and a long timeout buys nothing — it just burns the
+    # offline_after_seconds budget on one dead attempt instead of retrying. At 8s
+    # a congested minute still gets ~7 attempts rather than ~4, so there are more
+    # chances to catch a working moment.
+    fetch_timeout_seconds: float = 8.0
     framebuffer: str = "/dev/fb0"
     # Raw pixel format the framebuffer expects; must match [render].fb_format.
     fb_format: str = "rgb565"
     cache_path: str = "/var/lib/dashcast/dashboard.fb"
     # Show the "offline" overlay (dimmed last frame + notice box) after this many
     # seconds without reaching the server. 0 disables (just keep last frame).
-    offline_after_seconds: float = 60.0
-    # ...and only once this many fetches have failed back to back. Guards against
-    # a couple of slow transfers tripping the fetch timeout and being mistaken
-    # for an outage: with a 15s timeout, two stalls alone can span the grace
-    # period while the server is perfectly healthy.
+    #
+    # This has to sit ABOVE the noise floor of the Pi's link, not near it. On a
+    # real Pi Zero W over contended 2.4 GHz, 4.66 days of logs gave 1,531 runs of
+    # failed fetches: median gap 43s, p99 78s, worst ever 98s — all of it ordinary
+    # WiFi contention with the server perfectly healthy. At 60s that produced 640
+    # spurious notices; at 120s it would have produced zero. 180s keeps ~2x margin
+    # over the observed worst case and still flags a genuine outage inside three
+    # minutes, which is plenty when the last good frame stays on screen anyway.
+    offline_after_seconds: float = 180.0
+    # ...and only once this many fetches have failed back to back. Note this is
+    # the weaker of the two guards: a dropped-link error (EHOSTUNREACH) fails
+    # instantly rather than timing out, so the counter races up in seconds and
+    # raising it alone barely helps. offline_after_seconds is the real lever.
     offline_min_failures: int = 3
     # Occasionally re-fetch unconditionally instead of sending an
     # If-Modified-Since, so a cached frame that has diverged from the server's

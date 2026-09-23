@@ -58,7 +58,10 @@ port = 8080
 # gzip magic bytes, so plain "/dashboard.fb" also works unchanged.
 image_url = "http://192.0.2.20:8080/dashboard.fb.gz"
 interval_seconds = 5
-fetch_timeout_seconds = 15
+# Short on purpose: the payload is ~25 KB, so a healthy fetch is sub-second and a
+# long timeout just burns the offline_after_seconds budget on one dead attempt
+# instead of retrying sooner.
+fetch_timeout_seconds = 8
 # Framebuffer device to write to, and the pixel format it expects
 # (must match [render].fb_format).
 framebuffer = "/dev/fb0"
@@ -67,9 +70,15 @@ cache_path = "/var/lib/dashcast/dashboard.fb"
 # After this many seconds without reaching the server, dim the last frame and
 # overlay the offline notice box. 0 disables (just keep the last frame).
 # A 304 Not Modified counts as reaching the server, same as a full frame.
-offline_after_seconds = 60
-# ...and only after this many consecutive failed fetches, so one or two slow
-# transfers tripping fetch_timeout_seconds aren't mistaken for an outage.
+#
+# Set this ABOVE the noise floor of the Pi's link, not near it. Measured on a real
+# Pi Zero W over contended 2.4 GHz: median gap between successful fetches 43s,
+# p99 78s, worst 98s — all ordinary WiFi contention, server perfectly healthy.
+# 60s produced 640 spurious notices in 4.66 days; 120s would have produced none.
+offline_after_seconds = 180
+# ...and only after this many consecutive failed fetches. This is the weaker
+# guard: a dropped-link error fails instantly instead of timing out, so the
+# counter races up in seconds. offline_after_seconds is the real lever.
 offline_min_failures = 3
 # How often to skip the If-Modified-Since and re-fetch the whole frame, as a
 # safety net against a cached frame diverging from the server's. 0 disables.
