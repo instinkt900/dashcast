@@ -109,17 +109,17 @@ class DisplayConfig:
     # Raw pixel format the framebuffer expects; must match [render].fb_format.
     fb_format: str = "rgb565"
     cache_path: str = "/var/lib/dashcast/dashboard.fb"
-    # Show the "offline" overlay (dimmed last frame + notice box) after this many
-    # seconds without reaching the server. 0 disables (just keep last frame).
+    # Stamp the "outdated" badge into the frame's top-right corner after this many
+    # seconds without reaching the server. 0 disables (just keep the last frame,
+    # unannotated).
     #
-    # This has to sit ABOVE the noise floor of the Pi's link, not near it. On a
-    # real Pi Zero W over contended 2.4 GHz, 4.66 days of logs gave 1,531 runs of
-    # failed fetches: median gap 43s, p99 78s, worst ever 98s — all of it ordinary
-    # WiFi contention with the server perfectly healthy. At 60s that produced 640
-    # spurious notices; at 120s it would have produced zero. 180s keeps ~2x margin
-    # over the observed worst case and still flags a genuine outage inside three
-    # minutes, which is plenty when the last good frame stays on screen anyway.
-    offline_after_seconds: float = 180.0
+    # 60s is deliberately eager. The threshold used to be 180s because the old
+    # indicator was a centred card over a dimmed frame — obnoxious enough that
+    # firing it on the Pi's routine 40–100s WiFi stalls was worse than saying
+    # nothing. Now that it's a small corner badge that obscures nothing, showing
+    # it early is just honest: the frame really is a minute stale, and you can
+    # still read every number on it. Raise this if the badge feels twitchy.
+    offline_after_seconds: float = 60.0
     # ...and only once this many fetches have failed back to back. Note this is
     # the weaker of the two guards: a dropped-link error (EHOSTUNREACH) fails
     # instantly rather than timing out, so the counter races up in seconds and
@@ -130,7 +130,9 @@ class DisplayConfig:
     # can't persist. The server holds mtime steady while the dashboard is
     # unchanged, so 304s would otherwise continue indefinitely. 0 disables.
     full_refresh_seconds: float = 300.0
-    # Pre-rendered notice box (.fb) produced by `dashcast make-offline`.
+    # Pre-rendered "OUTDATED" corner badge (.fb) produced by `dashcast make-offline`.
+    # Must match OFFLINE_BOX_WIDTH/HEIGHT or the display ignores it (and draws
+    # nothing) rather than scribbling the wrong number of bytes into the panel.
     offline_box_path: str = "/etc/dashcast/offline_box.fb"
 
 

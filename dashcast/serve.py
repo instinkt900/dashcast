@@ -328,7 +328,7 @@ def run_serve(config_path: str, once: bool = False) -> int:
         re-download the full 768 KB blob even though not one pixel moved. Holding
         mtime steady lets the HTTP server answer 304 instead, which is what keeps
         the Pi Zero W's WiFi from saturating (a saturated link stalls fetches,
-        which used to trip the display's offline overlay while nothing was down).
+        which used to trip the display's outdated badge while nothing was down).
         Skipping the write also spares this host's disk, which is tight.
         """
         nonlocal last_png, last_fb

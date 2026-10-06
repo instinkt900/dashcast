@@ -40,9 +40,20 @@ One codebase, one config file, two roles.
   800×480 (`constants.DEFAULT_WIDTH/HEIGHT`).
 - Frame swap on the Pi is a single seek+write to the framebuffer → no flicker, and
   the **last good frame stays on screen** if the network/server drops. After a
-  grace period unreachable, the Pi dims the last frame and composites a
-  pre-rendered **offline notice box** over it, so a frozen dashboard can't be
-  mistaken for a live one.
+  grace period unreachable, the Pi stamps a small pre-rendered **"OUTDATED" badge**
+  (140×30, solid red) into the frame's **top-right corner**, so a frozen dashboard
+  can't be mistaken for a live one.
+- **The badge annotates, it does not obstruct — keep it that way.** It replaced a
+  centred 420×150 card over a *dimmed* frame. A dashboard that's a few minutes old
+  still tells you most of what you want to know, so hiding it to announce that it's
+  old costs more than it conveys. Measured: the badge touches 4,200 of 384,000
+  pixels (1.09%) and nothing else. Dropping the dim also removed a 384k-iteration
+  pure-Python pass that cost the Pi Zero W a second or two per event. Don't
+  reintroduce full-frame dimming or re-centre the notice.
+- Badge corners are **square on purpose**: the blob is blitted straight into a
+  framebuffer with no alpha, so rounded ends would need opaque fill in colours we
+  can't know (the dashboard pixels underneath vary). Faking it leaves wrong-coloured
+  notches on some frames.
 
 ## Stack
 
@@ -68,9 +79,9 @@ dashcast/            Python package
   __main__.py        `python -m dashcast`
   serve.py           RENDER side: persistent Chromium context, capture loop,
                      atomic PNG+.fb write, stdlib HTTP server + /healthz, dimmed-hours
-  display.py         PI side: fetch .fb over HTTP → /dev/fb0, last-frame hold,
-                     offline overlay. STDLIB ONLY — keep it that way.
-  offline.py         render the offline notice box (Pillow) → raw .fb blob
+  display.py         PI side: fetch .fb.gz over HTTP → /dev/fb0, last-frame hold,
+                     "outdated" corner badge. STDLIB ONLY — keep it that way.
+  offline.py         render the "outdated" corner badge (Pillow) → raw .fb blob
   config.py          TOML loader; dataclasses; _known(); token from env/file
   constants.py       panel res (800x480), shared filenames, fb bytes-per-pixel
 docker/              Dockerfile (slim, chromium-only), docker-compose.yml
@@ -83,7 +94,7 @@ config.example.toml  the only tracked config; real config.toml is gitignored
 ```
 dashcast serve       -c config.toml [--once]   # render + host image (serve side, Docker)
 dashcast display     -c config.toml [--once]   # fetch .fb, write framebuffer (Pi)
-dashcast make-offline -c config.toml -o out.fb [--text ..] [--subtext ..]
+dashcast make-offline -c config.toml -o out.fb [--text OUTDATED]
 ```
 
 - `serve` keeps ONE Chromium context alive, navigates once, then screenshots each
@@ -94,7 +105,11 @@ dashcast make-offline -c config.toml -o out.fb [--text ..] [--subtext ..]
   `no-store`, which would forbid the Pi from holding the frame it revalidates.
 - `serve --once` captures a single screenshot and exits (no HTTP) — handy for dev.
 - `make-offline` needs Pillow, so run it on the server/dev box, **not** the Pi;
-  the resulting `.fb` is shipped to the Pi.
+  the resulting `.fb` is shipped to the Pi (`deploy/assets/offline_box.fb`).
+  `--text` auto-shrinks the font (20px→10px) to fit the fixed badge width rather
+  than spilling over the edge. **If you change `OFFLINE_BOX_WIDTH/HEIGHT`, you must
+  regenerate and redeploy the blob**: the display length-checks it and, on a
+  mismatch, logs a warning and draws *no* badge at all (fails safe, silently).
 
 ## Configuration
 
@@ -110,7 +125,7 @@ One TOML with four sections (template: `config.example.toml`):
 - `[display]` — `image_url` (point at the **`.fb.gz`**), `framebuffer` (`/dev/fb0`),
   `fb_format` (must match `[render]`), `cache_path`, `offline_box_path`, plus the
   offline-trigger keys: `offline_after_seconds` **and** `offline_min_failures`
-  (both must be satisfied — elapsed time alone gave false offline notices), and
+  (both must be satisfied — elapsed time alone gave false notices), and
   `full_refresh_seconds` (how often to skip the `If-Modified-Since` so a diverged
   cached frame can't stick).
 
@@ -118,14 +133,17 @@ One TOML with four sections (template: `config.example.toml`):
 reached, and a framebuffer write error is logged as a display fault rather than an
 outage — otherwise a bad `/dev/fb0` write masquerades as a server outage.
 
-**Tuning the offline trigger (hard-won):** `offline_after_seconds` must sit *above*
-the noise floor of the Pi's WiFi, not near it. A Pi Zero W is 2.4 GHz-only with a
-single antenna, and on a contended home band it routinely loses 40–100s of
-connectivity with nothing wrong anywhere: 4.66 days of logs gave 1,531 runs of
-failed fetches — median gap 43s, p99 78s, **worst 98s** — dominated by
-`EHOSTUNREACH` (ARP got no reply, i.e. the server was never even contacted). At
-`offline_after_seconds = 60` that produced **640** false notices; at 120 it would
-have produced **zero**. Hence the 180s default. Note `offline_min_failures` is the
+**Tuning the offline trigger:** a Pi Zero W is 2.4 GHz-only with a single antenna,
+and on a contended home band it routinely loses 40–100s of connectivity with nothing
+wrong anywhere: 4.66 days of logs gave 1,531 runs of failed fetches — median gap 43s,
+p99 78s, **worst 98s** — dominated by `EHOSTUNREACH` (ARP got no reply, i.e. the
+server was never even contacted). While the indicator was a dimmed-frame card this
+forced `offline_after_seconds` *above* that noise floor (60s gave 640 false notices
+in 4.66 days; 180s was the chosen margin). **Now that the indicator is an
+unobtrusive corner badge the calculus is inverted** — flagging a genuinely
+one-minute-stale frame is useful, not noise, so the default is back to 60s. If you
+ever make the indicator intrusive again, raise this back above ~120s. Note
+`offline_min_failures` is the
 *weaker* guard — `EHOSTUNREACH` fails instantly rather than timing out, so the
 counter races up in seconds and raising it alone barely helps (6 still left 333
 events). Time is the lever. Symptoms of this class of problem are load-dependent by

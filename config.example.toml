@@ -67,15 +67,15 @@ fetch_timeout_seconds = 8
 framebuffer = "/dev/fb0"
 fb_format = "rgb565"
 cache_path = "/var/lib/dashcast/dashboard.fb"
-# After this many seconds without reaching the server, dim the last frame and
-# overlay the offline notice box. 0 disables (just keep the last frame).
-# A 304 Not Modified counts as reaching the server, same as a full frame.
+# After this many seconds without reaching the server, stamp the small "outdated"
+# badge into the frame's top-right corner. 0 disables (keep the last frame, with
+# no annotation). A 304 Not Modified counts as reaching the server.
 #
-# Set this ABOVE the noise floor of the Pi's link, not near it. Measured on a real
-# Pi Zero W over contended 2.4 GHz: median gap between successful fetches 43s,
-# p99 78s, worst 98s — all ordinary WiFi contention, server perfectly healthy.
-# 60s produced 640 spurious notices in 4.66 days; 120s would have produced none.
-offline_after_seconds = 180
+# Eager on purpose: the badge obscures nothing, so flagging a one-minute-old frame
+# is useful rather than annoying. This was 180s back when the indicator was a
+# centred card over a dimmed frame, which was too disruptive to fire on the Pi's
+# routine 40-100s WiFi stalls. Raise it if the badge feels twitchy.
+offline_after_seconds = 60
 # ...and only after this many consecutive failed fetches. This is the weaker
 # guard: a dropped-link error fails instantly instead of timing out, so the
 # counter races up in seconds. offline_after_seconds is the real lever.
@@ -83,6 +83,7 @@ offline_min_failures = 3
 # How often to skip the If-Modified-Since and re-fetch the whole frame, as a
 # safety net against a cached frame diverging from the server's. 0 disables.
 full_refresh_seconds = 300
-# Pre-rendered notice box, created with `dashcast make-offline` and shipped by
-# install-pi.sh. If missing, dashcast just keeps the last frame on outage.
+# Pre-rendered "OUTDATED" corner badge, created with `dashcast make-offline` and
+# shipped by install-pi.sh. If missing or the wrong size, dashcast just keeps the
+# last frame on outage with no annotation.
 offline_box_path = "/etc/dashcast/offline_box.fb"

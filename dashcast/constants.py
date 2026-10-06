@@ -28,9 +28,17 @@ def fb_bytes_per_pixel(fmt: str) -> int:
         raise ValueError(f"unsupported fb_format {fmt!r}; known: {sorted(FB_BYTES_PER_PIXEL)}")
 
 
-# Fixed size of the pre-rendered "offline" notice box. Both the generator
-# (make-offline) and the display compositor agree on this via these constants,
-# so the raw .fb blob needs no sidecar dimensions.
-OFFLINE_BOX_WIDTH = 420
-OFFLINE_BOX_HEIGHT = 150
+# Fixed size of the pre-rendered "stale frame" badge — a small red pill dropped
+# into the top-right corner, NOT a centred card over a dimmed frame. The point is
+# that an out-of-date dashboard is still worth reading, so the indicator must
+# annotate it rather than obstruct it.
+#
+# Both the generator (make-offline) and the display compositor agree on these
+# constants, so the raw .fb blob needs no sidecar dimensions. Changing them
+# invalidates any already-deployed blob — the display length-checks it and will
+# log a warning and show no badge at all until a regenerated one is shipped.
+OFFLINE_BOX_WIDTH = 140
+OFFLINE_BOX_HEIGHT = 30
+# Inset from the top and right edges of the panel.
+OFFLINE_BOX_MARGIN = 10
 DEFAULT_OFFLINE_BOX_NAME = "offline_box.fb"

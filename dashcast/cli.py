@@ -35,12 +35,11 @@ def main(argv: list[str] | None = None) -> int:
 
     p_offline = sub.add_parser(
         "make-offline",
-        help="pre-render the offline notice box to a raw .fb blob (needs Pillow; run on server/dev)",
+        help="pre-render the 'outdated' corner badge to a raw .fb blob (needs Pillow; run on server/dev)",
     )
     p_offline.add_argument("-c", "--config", required=True, help="path to config.toml")
     p_offline.add_argument("-o", "--out", required=True, help="output .fb path")
-    p_offline.add_argument("--text", default="Dashboard offline", help="notice title")
-    p_offline.add_argument("--subtext", default="Can't reach the render server", help="notice subtitle")
+    p_offline.add_argument("--text", default="OUTDATED", help="badge label (shrinks to fit)")
 
     args = parser.parse_args(argv)
     _setup_logging(args.verbose)
@@ -56,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "make-offline":
         from dashcast.offline import run_make_offline
 
-        return run_make_offline(args.config, args.out, args.text, args.subtext)
+        return run_make_offline(args.config, args.out, args.text)
 
     parser.print_help(sys.stderr)
     return 2

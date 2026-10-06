@@ -6,9 +6,11 @@ process — just bytes onto the framebuffer. Frame swaps are a single seek+write
 so there's no flicker, and the last good frame stays on screen if the network
 or server drops.
 
-If the render server stays unreachable past a grace period, we dim the last
-frame and composite a pre-rendered "offline" notice box over it, so a frozen
-dashboard can't be mistaken for a live one.
+If the render server stays unreachable past a grace period, we stamp a small
+pre-rendered "OUTDATED" badge into the frame's top-right corner, so a frozen
+dashboard can't be mistaken for a live one. The frame itself is left alone --
+an out-of-date dashboard is still worth reading, so the badge annotates it
+rather than obscuring it.
 """
 
 from __future__ import annotations
@@ -21,12 +23,12 @@ import signal
 import time
 import urllib.error
 import urllib.request
-from array import array
 from pathlib import Path
 
 from dashcast.config import Config, load_config
 from dashcast.constants import (
     OFFLINE_BOX_HEIGHT,
+    OFFLINE_BOX_MARGIN,
     OFFLINE_BOX_WIDTH,
     fb_bytes_per_pixel,
 )
@@ -93,24 +95,19 @@ def _unpack(blob: bytes) -> bytes:
     return blob
 
 
-def _dim_rgb565(data: bytes) -> bytes:
-    """Halve the brightness of an RGB565 buffer with the classic shift+mask
-    trick: (px >> 1) & 0x7BEF clears the bits that bleed across channels.
-    Assumes a little-endian framebuffer (true for armv6 Raspberry Pi)."""
-    px = array("H")
-    px.frombytes(data)
-    for i in range(len(px)):
-        px[i] = (px[i] >> 1) & 0x7BEF
-    return px.tobytes()
+def _blit_top_right(frame: bytearray, box: bytes, bw: int, bh: int, fw: int, fh: int, bpp: int) -> None:
+    """Copy the badge's rows into the top-right corner of the frame, in place.
 
-
-def _blit_center(frame: bytearray, box: bytes, bw: int, bh: int, fw: int, fh: int, bpp: int) -> None:
-    """Copy the box's rows into the centre of the frame buffer, in place."""
-    cx = (fw - bw) // 2
-    cy = (fh - bh) // 2
+    Clamped to the panel so an oversized badge can't write past the end of the
+    buffer (which would raise and cost us the frame entirely).
+    """
+    bw = min(bw, fw)
+    bh = min(bh, fh)
+    x = max(0, fw - bw - OFFLINE_BOX_MARGIN)
+    y = min(OFFLINE_BOX_MARGIN, max(0, fh - bh))
     row = bw * bpp
     for r in range(bh):
-        dst = ((cy + r) * fw + cx) * bpp
+        dst = ((y + r) * fw + x) * bpp
         frame[dst : dst + row] = box[r * row : (r + 1) * row]
 
 
@@ -165,16 +162,20 @@ def _load_offline_box(cfg: Config, bpp: int) -> bytes | None:
     return box
 
 
-def _render_offline_frame(base: bytes, box: bytes | None, cfg: Config, bpp: int) -> bytes:
-    """Dim the base frame and composite the notice box in the centre."""
-    fw, fh = cfg.render.width, cfg.render.height
-    if cfg.display.fb_format == "rgb565":
-        dimmed = _dim_rgb565(base)
-    else:  # dimming trick is rgb565-specific; fall back to the frame as-is
-        dimmed = base
-    frame = bytearray(dimmed)
+def _with_offline_badge(base: bytes, box: bytes | None, cfg: Config, bpp: int) -> bytes:
+    """Return the last good frame with the stale badge stamped into its corner.
+
+    The frame is left untouched otherwise — deliberately NOT dimmed. A dashboard
+    that is a few minutes old still tells you most of what you want to know, so
+    obscuring it to announce that it's old costs more than it conveys. Skipping
+    the dim also drops a 384k-iteration pure-Python pass that took the Pi Zero W
+    a second or two every time the badge went up.
+    """
+    frame = bytearray(base)
     if box is not None:
-        _blit_center(frame, box, OFFLINE_BOX_WIDTH, OFFLINE_BOX_HEIGHT, fw, fh, bpp)
+        _blit_top_right(
+            frame, box, OFFLINE_BOX_WIDTH, OFFLINE_BOX_HEIGHT, cfg.render.width, cfg.render.height, bpp
+        )
     return bytes(frame)
 
 
@@ -243,15 +244,15 @@ def run_display(config_path: str, once: bool = False) -> int:
                 ):
                     base = last_good if last_good is not None else bytes(expected)
                     try:
-                        fb.write(_render_offline_frame(base, offline_box, cfg, bpp))
+                        fb.write(_with_offline_badge(base, offline_box, cfg, bpp))
                         offline_shown = True
                         log.warning(
-                            "server unreachable for %.0fs (%d consecutive failures) — showing offline overlay",
+                            "server unreachable for %.0fs (%d consecutive failures) — flagging frame as outdated",
                             stale,
                             failures,
                         )
                     except Exception as werr:
-                        log.error("failed to draw offline overlay: %s", werr)
+                        log.error("failed to draw the outdated badge: %s", werr)
                 else:
                     log.warning(
                         "fetch failed (%d in a row, %.0fs stale; keeping current frame): %s",
@@ -261,7 +262,7 @@ def run_display(config_path: str, once: bool = False) -> int:
                     )
             else:
                 # A 200 *or* a 304 both prove the server is up — that, and only
-                # that, is what the offline overlay is about.
+                # that, is what the outdated badge is about.
                 failures = 0
                 last_success = time.monotonic()
                 if validator is None:
@@ -274,7 +275,7 @@ def run_display(config_path: str, once: bool = False) -> int:
                 try:
                     if data is None:
                         # Nothing new. Only touch the panel if it's currently
-                        # showing the offline overlay rather than a live frame.
+                        # showing the outdated badge rather than a live frame.
                         if offline_shown and last_good is not None:
                             fb.write(last_good)
                             offline_shown = False
