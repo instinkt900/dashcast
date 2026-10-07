@@ -90,6 +90,12 @@ class RenderConfig:
 class ServeConfig:
     host: str = "0.0.0.0"
     port: int = 8080
+    # /healthz answers 503 once this long passes without a successful capture.
+    # Without it /healthz only proved the HTTP thread was alive, and a wedged
+    # Chromium would keep reporting healthy while the Pi showed an old dashboard.
+    # Must comfortably exceed a full reload (nav_timeout_ms + wait_after_load_ms)
+    # so a slow periodic reload isn't reported as an outage. 0 disables the check.
+    stale_after_seconds: float = 120.0
 
 
 @dataclass
@@ -130,6 +136,17 @@ class DisplayConfig:
     # can't persist. The server holds mtime steady while the dashboard is
     # unchanged, so 304s would otherwise continue indefinitely. 0 disables.
     full_refresh_seconds: float = 300.0
+    # Uptime Kuma "Push" monitor URL (or anything that accepts a GET heartbeat).
+    # Called after a frame is confirmed current — fetched (200) or revalidated
+    # (304) AND written to the panel — so one heartbeat covers the whole chain:
+    # Pi up, WiFi up, dashcast running, server reachable. Empty disables.
+    # The URL carries Kuma's push token, so set it only in the untracked
+    # /etc/dashcast/config.toml, never in config.example.toml.
+    push_url: str = ""
+    # Minimum gap between heartbeats. Set the Kuma monitor's heartbeat interval to
+    # about twice this, with a couple of retries, so the Pi's routine 40–100s WiFi
+    # stalls don't page you.
+    push_interval_seconds: float = 60.0
     # Pre-rendered "OUTDATED" corner badge (.fb) produced by `dashcast make-offline`.
     # Must match OFFLINE_BOX_WIDTH/HEIGHT or the display ignores it (and draws
     # nothing) rather than scribbling the wrong number of bytes into the panel.

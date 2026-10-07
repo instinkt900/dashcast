@@ -50,6 +50,10 @@ fb_name = "dashboard.fb"
 [serve]
 host = "0.0.0.0"
 port = 8080
+# /healthz answers 503 after this many seconds without a successful capture, so a
+# monitor (and the Docker healthcheck) catches a wedged Chromium, not just a dead
+# HTTP thread. Keep it well above a full reload (nav_timeout_ms + settle). 0 = off.
+stale_after_seconds = 120
 
 [display]
 # Framebuffer blob as seen from the Pi — NOT the .png. Prefer the gzip'd twin:
@@ -83,6 +87,14 @@ offline_min_failures = 3
 # How often to skip the If-Modified-Since and re-fetch the whole frame, as a
 # safety net against a cached frame diverging from the server's. 0 disables.
 full_refresh_seconds = 300
+# Uptime Kuma "Push" monitor heartbeat, sent once the panel is confirmed current
+# (a 200 or 304 fetch, written to the framebuffer). The URL holds Kuma's push
+# token: set it in the real /etc/dashcast/config.toml only, never commit it. Paste
+# Kuma's URL as-is; status/msg/ping are filled in (ping = fetch time in ms).
+# push_url = "http://192.0.2.20:3001/api/push/<token>?status=up&msg=OK&ping="
+# Set the Kuma monitor's heartbeat interval to ~2x this, with a couple of retries,
+# so the Pi's routine WiFi stalls don't page you.
+push_interval_seconds = 60
 # Pre-rendered "OUTDATED" corner badge, created with `dashcast make-offline` and
 # shipped by install-pi.sh. If missing or the wrong size, dashcast just keeps the
 # last frame on outage with no annotation.

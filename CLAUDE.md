@@ -158,6 +158,32 @@ both the PNG and the `.fb` come out dimmed. Times are `"HH:MM"` (24h) in
 `[render].timezone` (empty = render host local time); `start > end` wraps midnight;
 `start == end` disables. `dim_brightness` is clamped to `[0,1]` in `load_config`.
 
+## Monitoring (Uptime Kuma)
+
+Kuma runs on the serve host but on its own compose network, so it reaches dashcast
+via the **host IP and published port**, not `localhost` (that's Kuma's own
+container) and not the `dashcast` name (doesn't resolve across networks).
+
+- **Serve side — HTTP monitor on `/healthz`.** It returns **503 once
+  `[serve].stale_after_seconds` (120) passes without a successful capture**, keyed
+  off the last *capture*, not the last publish (unchanged frames are never
+  republished, so mtime says nothing about liveness). This catches a wedged
+  Chromium, not just a dead HTTP thread. The Docker healthcheck hits the same
+  endpoint, so `docker ps` shows `unhealthy` too. The clock is seeded at server
+  start, so a cold launch isn't judged early. It does **not** detect a captured HA
+  login screen (expired token): that still counts as a successful capture.
+- **Display side — Push monitor.** The Pi serves nothing, so Kuma can't usefully
+  poll it; ping/TCP-22 only prove it's powered on. Instead the Pi GETs
+  `[display].push_url` after a frame is confirmed current (200 or 304 *and* written
+  to the panel), at most every `push_interval_seconds`. One heartbeat covers Pi,
+  WiFi, dashcast, and server reachability; `ping=` carries the fetch time, so Kuma
+  graphs the link. Pushes run on a daemon thread and skip if one is in flight, so a
+  stalled push can never delay a frame. Set Kuma's heartbeat interval to ~2x the
+  push interval with a couple of retries, or the Pi's routine 40–100s WiFi stalls
+  will page you. The push URL contains a token: untracked config only.
+- **Blind spot:** Kuma shares a host with dashcast, so if that host dies nothing
+  alerts.
+
 ### Two `config.toml` files (known gotcha)
 The repo-root `config.toml` is the dev/working copy. `docker/config.toml` is what
 the container bind-mounts read-only (compose resolves `./config.toml` relative to

@@ -48,17 +48,35 @@ _INIT_SCRIPT = """
 """
 
 
+# Monotonic time of the last successful capture, written by the capture loop and
+# read by /healthz. Seeded when the HTTP server starts so a cold Chromium launch
+# gets the full stale_after_seconds before it's judged. A bare float assignment
+# is atomic under the GIL, so no lock is needed.
+_last_capture: float = 0.0
+
+
 class _Handler(SimpleHTTPRequestHandler):
     """Serves the output directory, always revalidated, with a /healthz endpoint."""
 
+    stale_after = 0.0  # set from config in _start_http_server; 0 disables
+
     def do_GET(self):  # noqa: N802
         if self.path.rstrip("/") in ("/healthz", "/health"):
-            body = b"ok\n"
-            self.send_response(200)
+            # Healthy means "frames are still being produced", not merely "this
+            # thread is answering". Keyed off the last *capture*, not the last
+            # publish: unchanged frames are deliberately never republished, so
+            # file mtime says nothing about whether the loop is alive.
+            age = time.monotonic() - _last_capture
+            if self.stale_after and age > self.stale_after:
+                status, body = 503, f"stale: no capture for {age:.0f}s\n"
+            else:
+                status, body = 200, f"ok: last capture {age:.0f}s ago\n"
+            data = body.encode()
+            self.send_response(status)
             self.send_header("Content-Type", "text/plain")
-            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Length", str(len(data)))
             self.end_headers()
-            self.wfile.write(body)
+            self.wfile.write(data)
             return
         super().do_GET()
 
@@ -93,6 +111,9 @@ class _Server(ThreadingHTTPServer):
 
 
 def _start_http_server(cfg: Config) -> ThreadingHTTPServer:
+    global _last_capture
+    _last_capture = time.monotonic()
+    _Handler.stale_after = cfg.serve.stale_after_seconds
     directory = str(cfg.render.output_path.parent)
     handler = partial(_Handler, directory=directory)
     httpd = _Server((cfg.serve.host, cfg.serve.port), handler)
@@ -301,6 +322,7 @@ class Renderer:
 
 
 def run_serve(config_path: str, once: bool = False) -> int:
+    global _last_capture
     cfg = load_config(config_path)
     if not cfg.home_assistant.token:
         log.warning("no HA token set (DASHCAST_HA_TOKEN / token_file) — dashboard will likely show a login screen")
@@ -382,6 +404,7 @@ def run_serve(config_path: str, once: bool = False) -> int:
                 prev_brightness = brightness
             try:
                 published = _publish(renderer.capture(), brightness)
+                _last_capture = time.monotonic()
                 if published:
                     log.info("captured %s", published)
                 else:

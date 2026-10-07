@@ -20,8 +20,10 @@ import hashlib
 import logging
 import os
 import signal
+import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -46,6 +48,59 @@ def _install_signal_handlers() -> None:
 
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
+
+
+class _Heartbeat:
+    """Fire-and-forget heartbeats to an Uptime Kuma push monitor.
+
+    Each push runs on its own daemon thread, because on this Pi's WiFi a push can
+    stall for many seconds, and holding up the frame loop for a monitoring ping
+    would make the thing being monitored worse. If the previous push is still in
+    flight we skip rather than queue: a backlog of stale "up" beats is worthless.
+    Failures are logged at debug only; the monitor going red is the real signal.
+    """
+
+    def __init__(self, url: str, interval: float):
+        self.url = url
+        self.interval = interval
+        self._last = float("-inf")
+        self._inflight: threading.Thread | None = None
+
+    def beat(self, fetch_ms: float, msg: str) -> None:
+        if not self.url:
+            return
+        now = time.monotonic()
+        if now - self._last < self.interval:
+            return
+        if self._inflight is not None and self._inflight.is_alive():
+            return
+        self._last = now
+        url = self._with_params(fetch_ms, msg)
+        self._inflight = threading.Thread(target=self._send, args=(url,), name="heartbeat", daemon=True)
+        self._inflight.start()
+
+    def _with_params(self, fetch_ms: float, msg: str) -> str:
+        # Kuma's copy-paste URL already ends in "?status=up&msg=OK&ping=". Merge
+        # rather than append so ours win and nothing is duplicated. ping is the
+        # fetch time, which gives a free graph of the Pi's link quality.
+        parts = urllib.parse.urlsplit(self.url)
+        q = dict(urllib.parse.parse_qsl(parts.query, keep_blank_values=True))
+        q.update({"status": "up", "msg": msg, "ping": str(round(fetch_ms))})
+        return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(q)))
+
+    def flush(self, timeout: float) -> None:
+        """Give an in-flight push a moment to land before exit, so `display
+        --once` is a usable way to test the push URL."""
+        if self._inflight is not None:
+            self._inflight.join(timeout)
+
+    @staticmethod
+    def _send(url: str) -> None:
+        try:
+            with urllib.request.urlopen(url, timeout=10) as resp:  # noqa: S310 (trusted LAN URL)
+                resp.read()
+        except Exception as exc:
+            log.debug("heartbeat push failed: %s", exc)
 
 
 def _fetch(url: str, timeout: float, if_modified_since: str | None) -> tuple[bytes | None, str | None]:
@@ -190,6 +245,7 @@ def run_display(config_path: str, once: bool = False) -> int:
 
     fb = Framebuffer(cfg.display.framebuffer, expected)
     offline_box = _load_offline_box(cfg, bpp)
+    heartbeat = _Heartbeat(cfg.display.push_url, cfg.display.push_interval_seconds)
     shown_hash: str | None = None
     last_good: bytes | None = None
     last_success = time.monotonic()  # grace period counts from startup
@@ -227,7 +283,9 @@ def run_display(config_path: str, once: bool = False) -> int:
 
             # --- network phase: could we reach the server at all? ---
             try:
+                t0 = time.monotonic()
                 data, lm = _fetch(cfg.display.image_url, cfg.display.fetch_timeout_seconds, validator)
+                fetch_ms = (time.monotonic() - t0) * 1000
             except Exception as exc:
                 failures += 1
                 stale = time.monotonic() - last_success
@@ -311,6 +369,10 @@ def run_display(config_path: str, once: bool = False) -> int:
                     # Drop the validator so the next poll refetches in full rather
                     # than getting a 304 and leaving the panel permanently behind.
                     last_modified = None
+                else:
+                    # Only now is the panel known to be current, so only now does
+                    # the monitor hear "up". A framebuffer fault stays silent.
+                    heartbeat.beat(fetch_ms, "304 not modified" if data is None else f"{len(data)} B frame")
 
             if once:
                 break
@@ -318,4 +380,5 @@ def run_display(config_path: str, once: bool = False) -> int:
             time.sleep(max(0.0, interval - elapsed))
     finally:
         fb.close()
+        heartbeat.flush(timeout=5)
     return 0
