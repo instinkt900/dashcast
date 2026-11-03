@@ -79,8 +79,13 @@ class RenderConfig:
     #   color_gamma: out = in ** gamma per channel. > 1 darkens mid-tones and
     #     pulls pale colours away from white; a 3-item list [r, g, b] also
     #     corrects a colour cast.
+    #   color_gain: out = in * gain per channel (white balance). Scales dark and
+    #     light colours alike, so unlike gamma it does not crush a dark theme.
+    #     A 3-item list [r, g, b] corrects a colour cast: a blue-shifted panel
+    #     wants the lowest blue gain.
     #   color_contrast / color_saturation: PIL ImageEnhance factors.
     color_gamma: float | list = 1.0
+    color_gain: float | list = 1.0
     color_contrast: float = 1.0
     color_saturation: float = 1.0
 
@@ -90,8 +95,14 @@ class RenderConfig:
         return tuple(float(x) for x in g) if isinstance(g, list) else (float(g),) * 3  # type: ignore[return-value]
 
     @property
+    def gain_rgb(self) -> tuple[float, float, float]:
+        g = self.color_gain
+        return tuple(float(x) for x in g) if isinstance(g, list) else (float(g),) * 3  # type: ignore[return-value]
+
+    @property
     def color_correction(self) -> bool:
-        return self.gamma_rgb != (1.0, 1.0, 1.0) or self.color_contrast != 1.0 or self.color_saturation != 1.0
+        return (self.gamma_rgb != (1.0, 1.0, 1.0) or self.gain_rgb != (1.0, 1.0, 1.0)
+                or self.color_contrast != 1.0 or self.color_saturation != 1.0)
 
     @property
     def output_path(self) -> Path:
@@ -216,11 +227,15 @@ def load_config(path: str | os.PathLike) -> Config:
 
     render = RenderConfig(**_known(raw.get("render", {}), RenderConfig))
     render.dim_brightness = min(1.0, max(0.0, render.dim_brightness))
-    g = render.color_gamma
-    if not (isinstance(g, (int, float)) or (isinstance(g, list) and len(g) == 3)):
-        raise ConfigError("[render].color_gamma must be a number or a list of 3 numbers [r, g, b]")
+    for key in ("color_gamma", "color_gain"):
+        g = getattr(render, key)
+        if not (isinstance(g, (int, float)) or (isinstance(g, list) and len(g) == 3
+                                                 and all(isinstance(x, (int, float)) for x in g))):
+            raise ConfigError(f"[render].{key} must be a number or a list of 3 numbers [r, g, b]")
     if min(render.gamma_rgb) <= 0:
         raise ConfigError("[render].color_gamma values must be > 0")
+    if min(render.gain_rgb) < 0:
+        raise ConfigError("[render].color_gain values must be >= 0")
     if render.color_contrast < 0 or render.color_saturation < 0:
         raise ConfigError("[render].color_contrast and color_saturation must be >= 0")
     serve = ServeConfig(**_known(raw.get("serve", {}), ServeConfig))

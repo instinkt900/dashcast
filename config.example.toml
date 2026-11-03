@@ -48,7 +48,8 @@ fb_name = "dashboard.fb"
 # timezone = "Australia/Melbourne"   # dim schedule and the browser's clock; empty = container local time
 # Panel colour correction, applied to every frame before the dim (and to the PNG,
 # so it shows what the panel is sent). 1.0 = off.
-# color_gamma = 1.6             # > 1 darkens mid-tones; or [r, g, b], e.g. [1.6, 1.6, 1.8]
+# color_gain = [0.92, 0.87, 0.76]   # white balance per channel; safe for dark themes
+# color_gamma = 1.0             # > 1 darkens mid-tones (and crushes dark themes); or [r, g, b]
 # color_contrast = 1.0
 # color_saturation = 1.2
 

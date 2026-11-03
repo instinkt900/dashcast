@@ -223,8 +223,9 @@ def _adjust_png(png: bytes, r: RenderConfig, brightness: float) -> bytes:
 
     One decode/encode for both, and none at all when neither is active (the
     common daytime case with correction off). Order: saturation, contrast,
-    gamma, then the dim, so the night dim scales the already-corrected frame.
-    Gamma is a 768-entry lookup table, which Pillow applies in one pass.
+    gamma and gain, then the dim, so the night dim scales the already-corrected
+    frame. Gamma and gain share one 768-entry lookup table, which Pillow applies
+    in one pass.
     """
     if brightness >= 1.0 and not r.color_correction:
         return png
@@ -235,8 +236,9 @@ def _adjust_png(png: bytes, r: RenderConfig, brightness: float) -> bytes:
         img = ImageEnhance.Color(img).enhance(r.color_saturation)
     if r.color_contrast != 1.0:
         img = ImageEnhance.Contrast(img).enhance(r.color_contrast)
-    if r.gamma_rgb != (1.0, 1.0, 1.0):
-        lut = [round(255 * (i / 255) ** g) for g in r.gamma_rgb for i in range(256)]
+    if r.gamma_rgb != (1.0, 1.0, 1.0) or r.gain_rgb != (1.0, 1.0, 1.0):
+        lut = [min(255, round(255 * k * (i / 255) ** g))
+               for g, k in zip(r.gamma_rgb, r.gain_rgb) for i in range(256)]
         img = img.point(lut)
     if brightness < 1.0:
         img = ImageEnhance.Brightness(img).enhance(brightness)

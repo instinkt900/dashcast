@@ -209,6 +209,7 @@ docker builder prune -f && docker image prune -f
 | `dim_brightness` | 0.4 | brightness inside the window (0.0 = black, 1.0 = no change) |
 | `timezone` | — | IANA tz for the dim schedule and the capture browser's clock (e.g. `Australia/Melbourne`); empty = container local time |
 | `color_gamma` | 1.0 | panel gamma: `out = in ** gamma`; > 1 darkens mid-tones; or `[r, g, b]` per channel |
+| `color_gain` | 1.0 | white balance: `out = in * gain`; or `[r, g, b]` per channel |
 | `color_contrast` | 1.0 | contrast factor (1.0 = no change) |
 | `color_saturation` | 1.0 | saturation factor (1.0 = no change) |
 
@@ -218,11 +219,13 @@ render side, so both `dashboard.png` and the raw `dashboard.fb` come out dimmed 
 the Pi needs no changes. The window may wrap midnight (e.g. `22:00`–`07:00`).
 
 **Colour correction.** Small TFT panels often show light UI colours washed out
-compared with a desktop monitor. `color_gamma`, `color_contrast` and
+compared with a desktop monitor. `color_gain`, `color_gamma`, `color_contrast` and
 `color_saturation` correct every frame on the render side (before the dim), so the
-PNG shows exactly what the panel is sent. A gamma of about 1.5–2.0 pulls pale
-colours back from white; a per-channel list such as `[1.6, 1.6, 1.8]` also removes
-a colour cast. Tune by eye on the panel: the browser view stays the reference.
+PNG shows exactly what the panel is sent. Start with `color_gain`: it scales each
+channel, so a list such as `[0.92, 0.87, 0.76]` both tones down whites and removes a
+blue cast, and it treats light and dark themes alike. Gamma > 1 also pulls pale
+colours back from white, but it crushes dark colours, so a dark dashboard turns
+near-black. Tune by eye on the panel: the browser view stays the reference.
 
 `[serve]`
 | key | default | meaning |
