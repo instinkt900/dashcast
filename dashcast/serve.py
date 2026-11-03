@@ -218,12 +218,28 @@ def _resolve_timezone(name: str):
         return None
 
 
-def _dim_png(png: bytes, brightness: float) -> bytes:
-    """Return a brightness-scaled copy of a PNG (brightness in [0,1])."""
+def _adjust_png(png: bytes, r: RenderConfig, brightness: float) -> bytes:
+    """Return a PNG with the panel colour correction and the dim applied.
+
+    One decode/encode for both, and none at all when neither is active (the
+    common daytime case with correction off). Order: saturation, contrast,
+    gamma, then the dim, so the night dim scales the already-corrected frame.
+    Gamma is a 768-entry lookup table, which Pillow applies in one pass.
+    """
+    if brightness >= 1.0 and not r.color_correction:
+        return png
     from PIL import Image, ImageEnhance
 
     img = Image.open(io.BytesIO(png)).convert("RGB")
-    img = ImageEnhance.Brightness(img).enhance(brightness)
+    if r.color_saturation != 1.0:
+        img = ImageEnhance.Color(img).enhance(r.color_saturation)
+    if r.color_contrast != 1.0:
+        img = ImageEnhance.Contrast(img).enhance(r.color_contrast)
+    if r.gamma_rgb != (1.0, 1.0, 1.0):
+        lut = [round(255 * (i / 255) ** g) for g in r.gamma_rgb for i in range(256)]
+        img = img.point(lut)
+    if brightness < 1.0:
+        img = ImageEnhance.Brightness(img).enhance(brightness)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
@@ -272,9 +288,14 @@ class Renderer:
 
     def _new_page(self) -> None:
         r = self.cfg.render
+        # Give the browser the configured zone, or it runs in the container's
+        # (UTC) and JS dates on the dashboard are off by the UTC offset. Only a
+        # zone that resolves is passed: Playwright rejects an unknown one.
+        tz = r.timezone if _resolve_timezone(r.timezone) else None
         self._context = self._browser.new_context(
             viewport={"width": r.width, "height": r.height},
             device_scale_factor=r.device_scale_factor,
+            timezone_id=tz,
         )
         token_js = json.dumps(self.cfg.home_assistant.token)
         url_js = json.dumps(self.cfg.home_assistant.url.rstrip("/"))
@@ -354,8 +375,7 @@ def run_serve(config_path: str, once: bool = False) -> int:
         Skipping the write also spares this host's disk, which is tight.
         """
         nonlocal last_png, last_fb
-        if brightness < 1.0:
-            png = _dim_png(png, brightness)
+        png = _adjust_png(png, r, brightness)
         if png == last_png:
             return ""  # nothing moved; leave both files (and their mtimes) alone
 

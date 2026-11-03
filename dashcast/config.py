@@ -68,7 +68,30 @@ class RenderConfig:
     dim_start: str = ""
     dim_end: str = ""
     dim_brightness: float = 0.4
+    # IANA zone for the dim schedule AND for the capture browser's clock. Without
+    # it headless Chromium runs in the container's zone (UTC), and any dashboard
+    # card that formats a date with plain JS shows the wrong day near midnight.
     timezone: str = ""
+    # Colour correction for the panel, applied to every frame before it is
+    # published (so the PNG shows what the panel is sent). Small TFT panels
+    # tend to show light UI colours washed out next to a desktop monitor.
+    # 1.0 everywhere = off.
+    #   color_gamma: out = in ** gamma per channel. > 1 darkens mid-tones and
+    #     pulls pale colours away from white; a 3-item list [r, g, b] also
+    #     corrects a colour cast.
+    #   color_contrast / color_saturation: PIL ImageEnhance factors.
+    color_gamma: float | list = 1.0
+    color_contrast: float = 1.0
+    color_saturation: float = 1.0
+
+    @property
+    def gamma_rgb(self) -> tuple[float, float, float]:
+        g = self.color_gamma
+        return tuple(float(x) for x in g) if isinstance(g, list) else (float(g),) * 3  # type: ignore[return-value]
+
+    @property
+    def color_correction(self) -> bool:
+        return self.gamma_rgb != (1.0, 1.0, 1.0) or self.color_contrast != 1.0 or self.color_saturation != 1.0
 
     @property
     def output_path(self) -> Path:
@@ -193,6 +216,13 @@ def load_config(path: str | os.PathLike) -> Config:
 
     render = RenderConfig(**_known(raw.get("render", {}), RenderConfig))
     render.dim_brightness = min(1.0, max(0.0, render.dim_brightness))
+    g = render.color_gamma
+    if not (isinstance(g, (int, float)) or (isinstance(g, list) and len(g) == 3)):
+        raise ConfigError("[render].color_gamma must be a number or a list of 3 numbers [r, g, b]")
+    if min(render.gamma_rgb) <= 0:
+        raise ConfigError("[render].color_gamma values must be > 0")
+    if render.color_contrast < 0 or render.color_saturation < 0:
+        raise ConfigError("[render].color_contrast and color_saturation must be >= 0")
     serve = ServeConfig(**_known(raw.get("serve", {}), ServeConfig))
     display = DisplayConfig(**_known(raw.get("display", {}), DisplayConfig))
 

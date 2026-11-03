@@ -45,7 +45,12 @@ fb_name = "dashboard.fb"
 # dim_start = "22:00"
 # dim_end = "07:00"
 # dim_brightness = 0.4          # fraction of full brightness (0.0 = black, 1.0 = off)
-# timezone = "Australia/Melbourne"   # empty = the render container's local time
+# timezone = "Australia/Melbourne"   # dim schedule and the browser's clock; empty = container local time
+# Panel colour correction, applied to every frame before the dim (and to the PNG,
+# so it shows what the panel is sent). 1.0 = off.
+# color_gamma = 1.6             # > 1 darkens mid-tones; or [r, g, b], e.g. [1.6, 1.6, 1.8]
+# color_contrast = 1.0
+# color_saturation = 1.2
 
 [serve]
 host = "0.0.0.0"

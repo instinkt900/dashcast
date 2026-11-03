@@ -157,6 +157,16 @@ dimmed to `dim_brightness` (fraction of full; `1.0` = off) via
 both the PNG and the `.fb` come out dimmed. Times are `"HH:MM"` (24h) in
 `[render].timezone` (empty = render host local time); `start > end` wraps midnight;
 `start == end` disables. `dim_brightness` is clamped to `[0,1]` in `load_config`.
+The same `timezone` is passed to the browser context (`timezone_id`), so dashboard
+JS that formats dates sees local time, not the container's UTC.
+
+**Colour correction** (render-side): `color_gamma` (number or `[r, g, b]`),
+`color_contrast`, `color_saturation`, all 1.0 = off. The panel shows light colours
+washed out next to a monitor, so this corrects for the panel, not the dashboard.
+`_adjust_png` applies saturation → contrast → gamma LUT → dim in **one**
+decode/encode, and skips decoding entirely when nothing is active. It runs before
+the identical-frame check, so it does not disturb the 304 contract. Keep it on the
+serve side: the Pi path must stay stdlib-only and is too slow for per-pixel work.
 
 ## Monitoring (Uptime Kuma)
 
