@@ -60,6 +60,10 @@ port = 8080
 # monitor (and the Docker healthcheck) catches a wedged Chromium, not just a dead
 # HTTP thread. Keep it well above a full reload (nav_timeout_ms + settle). 0 = off.
 stale_after_seconds = 120
+# Exit (status 1) after this many seconds without a successful capture, so the
+# container's restart policy restarts it. Docker never restarts an unhealthy
+# container by itself. Keep it above stale_after_seconds. 0 = off.
+exit_after_seconds = 300
 
 [display]
 # Framebuffer blob as seen from the Pi — NOT the .png. Prefer the gzip'd twin:

@@ -130,6 +130,12 @@ class ServeConfig:
     # Must comfortably exceed a full reload (nav_timeout_ms + wait_after_load_ms)
     # so a slow periodic reload isn't reported as an outage. 0 disables the check.
     stale_after_seconds: float = 120.0
+    # The process exits (status 1) once this long passes without a successful
+    # capture, so the container's restart policy starts it fresh. Docker only
+    # reports an unhealthy container; it never restarts one. Keep it above
+    # stale_after_seconds so the in-process recovery (new page, relaunched
+    # Chromium) gets its chance first. 0 disables the exit.
+    exit_after_seconds: float = 300.0
 
 
 @dataclass

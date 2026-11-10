@@ -110,6 +110,30 @@ class _Server(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+def _start_watchdog(exit_after: float) -> None:
+    """Exit the process when no capture has succeeded for exit_after seconds.
+
+    Docker's healthcheck only *reports* unhealthy; nothing restarts the container
+    on it. Exiting hands the problem to the restart policy, which starts a clean
+    process and a fresh Chromium. A thread, not a check in the capture loop, so a
+    capture that hangs outright is caught too. os._exit, because sys.exit in a
+    thread only ends that thread (and the Playwright cleanup could itself hang).
+    """
+    if not exit_after:
+        return
+
+    def watch() -> None:
+        while True:
+            time.sleep(min(10.0, exit_after))
+            age = time.monotonic() - _last_capture
+            if age > exit_after:
+                log.error("no capture for %.0fs; exiting so the restart policy restarts dashcast", age)
+                logging.shutdown()
+                os._exit(1)
+
+    threading.Thread(target=watch, name="watchdog", daemon=True).start()
+
+
 def _start_http_server(cfg: Config) -> ThreadingHTTPServer:
     global _last_capture
     _last_capture = time.monotonic()
@@ -431,7 +455,8 @@ def run_serve(config_path: str, once: bool = False) -> int:
             log.info("wrote %s", _publish(renderer.capture(), brightness))
             return 0
 
-        _start_http_server(cfg)
+        _start_http_server(cfg)  # seeds _last_capture, which the watchdog reads
+        _start_watchdog(cfg.serve.exit_after_seconds)
         interval = r.interval_seconds
         prev_brightness = 1.0
         while True:

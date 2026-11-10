@@ -183,6 +183,14 @@ container) and not the `dashcast` name (doesn't resolve across networks).
   endpoint, so `docker ps` shows `unhealthy` too. The clock is seeded at server
   start, so a cold launch isn't judged early. It does **not** detect a captured HA
   login screen (expired token): that still counts as a successful capture.
+- **Self-recovery.** Docker only *reports* `unhealthy`; it never restarts on it.
+  So recovery is layered: `_ensure_page` recreates a dead page, and relaunches
+  Chromium when the browser itself is gone (a crash under host memory pressure
+  left the old code recreating contexts on a dead browser forever). If captures
+  still fail for `[serve].exit_after_seconds` (300), a watchdog thread calls
+  `os._exit(1)` and the compose `restart: always` starts a clean process. Keep
+  `exit_after_seconds` above `stale_after_seconds` so the in-process recovery and
+  the monitor alert come first.
 - **Display side — Push monitor.** The Pi serves nothing, so Kuma can't usefully
   poll it; ping/TCP-22 only prove it's powered on. Instead the Pi GETs
   `[display].push_url` after a frame is confirmed current (200 or 304 *and* written
