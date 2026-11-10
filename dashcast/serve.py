@@ -263,6 +263,11 @@ class Renderer:
         from playwright.sync_api import sync_playwright
 
         self._pw = sync_playwright().start()
+        self._launch_browser()
+        self._new_page()
+        return self
+
+    def _launch_browser(self) -> None:
         self._browser = self._pw.chromium.launch(
             headless=True,
             args=[
@@ -272,8 +277,6 @@ class Renderer:
                 "--hide-scrollbars",
             ],
         )
-        self._new_page()
-        return self
 
     def __exit__(self, *exc):
         for closer in (self._context, self._browser):
@@ -307,6 +310,22 @@ class Renderer:
         self._needs_nav = True
 
     def _ensure_page(self) -> None:
+        # A dead page can sit on a dead browser: Chromium itself crashed (seen
+        # when the host swapped hard). Recreating only the context then fails on
+        # every interval forever ("Browser.new_context: Target page, context or
+        # browser has been closed"), so check the browser first and relaunch it.
+        if self._browser is None or not self._browser.is_connected():
+            log.warning("browser gone; relaunching Chromium")
+            try:
+                if self._browser:
+                    self._browser.close()
+            except Exception:
+                pass
+            self._context = None
+            self._page = None
+            self._launch_browser()
+            self._new_page()
+            return
         if self._page is None or self._page.is_closed():
             log.warning("page gone; recreating context")
             try:
